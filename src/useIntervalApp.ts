@@ -387,6 +387,9 @@ export function useIntervalApp() {
     segmentIndex,
     phase,
     secondsRemaining: Math.ceil(remainingInPhase),
+    // The ring animates against real time, so it needs the unrounded value the
+    // digits throw away.
+    phaseRemainingMs: remainingInPhase * 1000,
     phaseProgress,
     totalRemaining: Math.max(0, timeline.totalDuration - elapsed),
     overallProgress:

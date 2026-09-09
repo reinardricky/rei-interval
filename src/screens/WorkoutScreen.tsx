@@ -67,6 +67,9 @@ export function WorkoutScreen({ app }: { app: IntervalApp }) {
         <PhaseClock
           secondsRemaining={app.secondsRemaining}
           progress={app.phaseProgress}
+          remainingMs={app.phaseRemainingMs}
+          running={app.status === 'running'}
+          segmentIndex={app.segmentIndex}
           label={paused ? 'Paused' : phaseLabel[app.phase]}
           accent={accent}
           diameter={diameter}
