@@ -4,10 +4,13 @@
   "main": "index.ts",
   "private": true,
   "scripts": {
-    "start": "expo start",
-    "android": "expo start --android",
-    "prebuild": "expo prebuild --platform android --clean",
-    "apk": "cd android && ./gradlew assembleRelease",
+    "start": "expo start --dev-client --localhost",
+    "start:lan": "expo start --dev-client",
+    "android": "expo run:android",
+    "android:release": "expo run:android --variant release",
+    "apk": "cd android && gradlew assembleRelease",
+    "aab": "cd android && gradlew bundleRelease",
+    "clean:android": "cd android && gradlew clean",
     "test": "jest",
     "typecheck": "tsc --noEmit"
   },
@@ -34,6 +37,8 @@
   "jest": {
     "preset": "ts-jest",
     "testEnvironment": "node",
-    "testMatch": ["<rootDir>/src/**/*.test.ts"]
+    "testMatch": [
+      "<rootDir>/src/**/*.test.ts"
+    ]
   }
 }

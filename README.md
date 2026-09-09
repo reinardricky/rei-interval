@@ -18,50 +18,106 @@ clock stays honest even when Android throttles background timers.
 
 ## Requirements
 
-**Node ≥ 22.13** (or 20.19.4+, or 24.3+). React Native 0.86 declares this and
-will emit `EBADENGINE` warnings on older versions — Node 22.4 in particular is
-just below the line.
+This is a plain native Android project — you build it yourself and install it
+over a USB cable. There is no cloud build step and no Expo Go.
+
+- **Node ≥ 22.13** (or 20.19.4+, or 24.3+). React Native 0.86 declares this and
+  will emit `EBADENGINE` warnings on older versions — Node 22.4 in particular is
+  just below the line.
+- **JDK 17 or newer**, with `JAVA_HOME` set.
+- **Android SDK**, with `ANDROID_HOME` set. Android Studio installs it to
+  `%LOCALAPPDATA%\Android\Sdk` on Windows, `~/Library/Android/sdk` on macOS.
+- Add `$ANDROID_HOME/platform-tools` to your `PATH` so you can run `adb`
+  yourself. The build does not need it — it finds `adb` via `ANDROID_HOME` — but
+  every debugging step below does.
+
+## Running on a device over USB
+
+On the phone, enable **Developer options** (tap Build number seven times in
+Settings → About phone), then turn on **USB debugging**. Plug in the cable and
+accept the RSA fingerprint prompt.
 
 ```bash
-nvm install 22 && nvm use 22
-```
-
-## Running in development
-
-```bash
+adb devices          # should list your phone as "device", not "unauthorized"
 npm install
-npx expo start          # then press "a", or scan with Expo Go
+npm run android      # Gradle build → installs via adb → starts Metro
 ```
 
-Note: audio and keep-awake are native modules. They work in Expo Go, but if you
-hit anything odd, build a development client (`eas build --profile development`).
+The first build compiles the native project and takes a few minutes. After that,
+JS changes reload instantly over the cable and you only rebuild when native
+dependencies or anything under `android/` changes.
+
+If the app is already installed and you only want the JS dev server:
+
+```bash
+npm start            # Metro on localhost, reached over the cable via adb reverse
+```
+
+`npm start` uses `--localhost`, which routes Metro through `adb reverse
+tcp:8081` — the phone talks to your machine over USB, so it works with no shared
+Wi-Fi at all. Use `npm run start:lan` instead if you'd rather serve over the
+network. If the app can't reach the bundler, re-run the forward by hand:
+
+```bash
+adb reverse tcp:8081 tcp:8081
+```
+
+Useful while running:
+
+```bash
+adb logcat -s ReactNative:V ReactNativeJS:V   # JS logs and redbox stack traces
+adb shell input keyevent 82                   # open the dev menu on the device
+adb uninstall com.reinardricky.reisinterval   # start from a clean install
+```
 
 ## Building an APK
 
-### Cloud (recommended — no Android SDK needed)
-
 ```bash
-npm install -g eas-cli
-eas login
-eas build --platform android --profile preview
-```
-
-The `preview` profile is configured for `buildType: apk`, so you get an
-installable APK rather than an AAB. EAS gives you a download link when it
-finishes.
-
-### Local
-
-Requires the Android SDK and JDK 17 installed, with `ANDROID_HOME` set.
-
-```bash
-npm run prebuild          # expo prebuild --platform android --clean
-cd android && ./gradlew assembleRelease
+npm run apk
 # → android/app/build/outputs/apk/release/app-release.apk
 ```
 
-The `android/` folder is generated and gitignored — regenerate it rather than
-editing it by hand, or your changes will be wiped by the next prebuild.
+Install it on the connected phone with `adb install -r <path>`, or use
+`npm run android:release` to build the release variant and push it over the
+cable in one step. `npm run aab` produces an app bundle for the Play Store.
+
+> **If the release build dies with `clang frontend command failed due to
+> signal`,** it ran out of memory rather than hitting a code problem. Ninja
+> fans out one C++ job per core across four ABIs, which a loaded machine will
+> not survive. Build one architecture at a time instead:
+>
+> ```bash
+> cd android && gradlew assembleRelease --max-workers=2 -PreactNativeArchitectures=arm64-v8a
+> ```
+>
+> `arm64-v8a` covers every phone made in the last several years. Debug builds
+> compile the same code with lighter optimisation and are not affected.
+
+> **Release builds are signed with the debug keystore.** That is fine for
+> sideloading onto your own phone, but you must generate a real keystore and
+> point `signingConfigs.release` in [`android/app/build.gradle`](android/app/build.gradle)
+> at it before publishing anywhere.
+
+## Working with the native project
+
+`android/` is committed and is edited by hand — permissions, the launcher icon,
+the app label, Gradle config. **Do not run `expo prebuild`**; it regenerates the
+folder from `app.json` and would overwrite your changes.
+
+The consequence is that `app.json` no longer drives the native side. Fields like
+`android.package`, `icon` and `splash` were applied once at generation time;
+changing them now does nothing on its own. Edit the native file instead:
+
+| Change | File |
+|---|---|
+| App name | `android/app/src/main/res/values/strings.xml` |
+| Package / version | `android/app/build.gradle` |
+| Permissions, deep links | `android/app/src/main/AndroidManifest.xml` |
+| Launcher icons | `android/app/src/main/res/mipmap-*/` |
+
+The Expo SDK packages (`expo-audio`, `expo-haptics`, `expo-keep-awake`,
+`expo-linear-gradient`) remain as ordinary autolinked npm dependencies — they
+are native modules compiled into the APK like any other React Native library.
 
 ## Verifying
 
@@ -99,4 +155,10 @@ approach and it fails: nothing has anything to contrast against, and the queue
 sinks into the background. Paused drains the accent to grey, so "not running" is
 readable without reading anything.
 
-Phase palette: Prepare amber, Work orange, Rest green, Set Rest blue.
+Phase palette: Prepare amber, Work electric violet, Rest green, Set Rest sky.
+Work and rest sit ~110° apart on the wheel because that pair is the one read
+from the corner of the eye mid-effort — they have to be unmistakable, not
+merely different. Ink on top of an accent is not chosen by hand: `onAccent()`
+in [`src/theme.ts`](src/theme.ts) picks black or white by relative luminance,
+so the palette can move without quietly dropping text below contrast — white on
+the old orange was only 2.9:1.

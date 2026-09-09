@@ -10,7 +10,7 @@ import {
   View,
 } from 'react-native';
 
-import { theme } from '../theme';
+import { onAccent, theme } from '../theme';
 
 type Props = {
   visible: boolean;
@@ -112,5 +112,5 @@ const styles = StyleSheet.create({
   cancelText: { color: theme.textDim, fontWeight: '700', fontSize: 15 },
   confirm: { backgroundColor: theme.brand },
   disabled: { opacity: 0.4 },
-  confirmText: { color: '#fff', fontWeight: '800', fontSize: 15 },
+  confirmText: { color: onAccent(theme.brand), fontWeight: '800', fontSize: 15 },
 });

@@ -81,3 +81,46 @@ export function indexAt(timeline: Timeline, elapsed: number): number {
   }
   return timeline.segments.length;
 }
+
+/** A sound the session makes, and the exact offset it belongs on. */
+export type CueName = 'tick' | 'work' | 'rest' | 'complete';
+
+export type CueEvent = {
+  /** Offset from session start, in seconds. */
+  at: number;
+  cue: CueName;
+};
+
+/** How many seconds of countdown ticks close out a phase. */
+const COUNTDOWN_FROM = 3;
+
+/**
+ * Every cue the session will make, in order.
+ *
+ * Precomputing these is what lets a cue be *scheduled* for its instant instead
+ * of noticed after the fact by the sampling loop. Polling can only discover a
+ * boundary on the next sample, so a 100ms loop puts every beep an average of
+ * 50ms — and at worst a full tick — behind the second it belongs to, before
+ * the audio pipeline has added any latency of its own.
+ */
+export function buildCueSchedule(timeline: Timeline): CueEvent[] {
+  const events: CueEvent[] = [];
+
+  timeline.segments.forEach((segment) => {
+    events.push({ at: segment.start, cue: segment.phase === 'work' ? 'work' : 'rest' });
+
+    const end = segment.start + segment.duration;
+    for (let left = COUNTDOWN_FROM; left >= 1; left--) {
+      const at = end - left;
+      // A short phase has no room for the full countdown: never tick before the
+      // phase has begun, and never double up on the cue that opens it.
+      if (at > segment.start) events.push({ at, cue: 'tick' });
+    }
+  });
+
+  if (timeline.totalDuration > 0) {
+    events.push({ at: timeline.totalDuration, cue: 'complete' });
+  }
+
+  return events.sort((a, b) => a.at - b.at);
+}

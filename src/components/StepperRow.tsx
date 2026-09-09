@@ -9,7 +9,7 @@ import {
 } from 'react-native';
 import * as Haptics from 'expo-haptics';
 
-import { theme } from '../theme';
+import { onAccent, theme } from '../theme';
 
 type Props = {
   label: string;
@@ -202,5 +202,5 @@ const styles = StyleSheet.create({
   action: { paddingHorizontal: 18, paddingVertical: 11, borderRadius: 10 },
   cancel: { color: theme.textDim, fontWeight: '700', fontSize: 15 },
   confirm: { backgroundColor: theme.brand },
-  confirmText: { color: '#fff', fontWeight: '800', fontSize: 15 },
+  confirmText: { color: onAccent(theme.brand), fontWeight: '800', fontSize: 15 },
 });

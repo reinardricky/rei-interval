@@ -1,5 +1,5 @@
 import { defaultConfig, sanitizeConfig, totalSeconds } from './config';
-import { buildTimeline, indexAt } from './timeline';
+import { buildCueSchedule, buildTimeline, indexAt } from './timeline';
 import { parsePresets, uniqueName, type Preset } from './preset';
 
 describe('timeline', () => {
@@ -74,6 +74,65 @@ describe('timeline', () => {
     expect(
       timeline.segments.filter((s) => s.phase === 'work').map((s) => `${s.set}/${s.cycle}`),
     ).toEqual(['1/1', '1/2', '2/1', '2/2']);
+  });
+});
+
+describe('cue schedule', () => {
+  it('opens every phase and counts down its last three seconds', () => {
+    const timeline = buildTimeline({
+      prepareSeconds: 10,
+      workSeconds: 20,
+      restSeconds: 0,
+      cycles: 1,
+      sets: 1,
+      setRestSeconds: 0,
+    });
+    expect(buildCueSchedule(timeline)).toEqual([
+      { at: 0, cue: 'rest' }, // prepare opens on the non-work tone
+      { at: 7, cue: 'tick' },
+      { at: 8, cue: 'tick' },
+      { at: 9, cue: 'tick' },
+      { at: 10, cue: 'work' },
+      { at: 27, cue: 'tick' },
+      { at: 28, cue: 'tick' },
+      { at: 29, cue: 'tick' },
+      { at: 30, cue: 'complete' },
+    ]);
+  });
+
+  it('never ticks before a phase it belongs to has begun', () => {
+    // A 2s phase has room for one countdown tick, not three.
+    const timeline = buildTimeline({
+      prepareSeconds: 0,
+      workSeconds: 2,
+      restSeconds: 0,
+      cycles: 1,
+      sets: 1,
+      setRestSeconds: 0,
+    });
+    const schedule = buildCueSchedule(timeline);
+    expect(schedule.every((event) => event.at >= 0)).toBe(true);
+    expect(schedule).toEqual([
+      { at: 0, cue: 'work' },
+      { at: 1, cue: 'tick' },
+      { at: 2, cue: 'complete' },
+    ]);
+  });
+
+  it('is ordered, and every cue lands inside the session', () => {
+    const timeline = buildTimeline(defaultConfig);
+    const schedule = buildCueSchedule(timeline);
+    const offsets = schedule.map((event) => event.at);
+    expect(offsets).toEqual([...offsets].sort((a, b) => a - b));
+    expect(offsets[0]).toBe(0);
+    expect(offsets[offsets.length - 1]).toBe(timeline.totalDuration);
+  });
+
+  it('opens each phase exactly once', () => {
+    const timeline = buildTimeline(defaultConfig);
+    const openings = buildCueSchedule(timeline).filter((event) => event.cue !== 'tick');
+    // One per segment, plus the completion cue.
+    expect(openings).toHaveLength(timeline.segments.length + 1);
   });
 });
 

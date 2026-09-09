@@ -7,7 +7,7 @@ import { formatDuration, totalSeconds } from '../models/config';
 import { theme } from '../theme';
 import type { IntervalApp } from '../useIntervalApp';
 
-const ACCENT = '#22C55E';
+const ACCENT = theme.success;
 
 export function CompleteScreen({ app }: { app: IntervalApp }) {
   const insets = useSafeAreaInsets();

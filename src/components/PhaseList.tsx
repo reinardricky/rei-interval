@@ -1,9 +1,9 @@
-import React, { useEffect, useRef } from 'react';
-import { FlatList, StyleSheet, Text, View } from 'react-native';
+import React, { useCallback, useEffect, useRef } from 'react';
+import { FlatList, type ListRenderItem, StyleSheet, Text, View } from 'react-native';
 
 import { formatDuration } from '../models/config';
 import { Segment, Timeline, phaseLabel } from '../models/timeline';
-import { theme } from '../theme';
+import { onAccent, theme } from '../theme';
 
 export const ROW_HEIGHT = 72;
 /**
@@ -11,6 +11,16 @@ export const ROW_HEIGHT = 72;
  * read as "there is something above", without spending space on history.
  */
 const PEEK_ABOVE = ROW_HEIGHT * 0.34;
+
+const keyExtractor = (_: Segment, index: number) => String(index);
+
+/** Fixed row height makes the scroll offset exact arithmetic rather than a
+ *  layout guess, and lets the list skip measuring every row. */
+const getItemLayout = (_: ArrayLike<Segment> | null | undefined, index: number) => ({
+  length: ROW_HEIGHT,
+  offset: ROW_HEIGHT * index,
+  index,
+});
 
 type Props = {
   timeline: Timeline;
@@ -20,7 +30,7 @@ type Props = {
 };
 
 /** The whole session as a queue, current phase highlighted and auto-scrolled. */
-export function PhaseList({ timeline, currentIndex, showSets, accent }: Props) {
+function PhaseListInner({ timeline, currentIndex, showSets, accent }: Props) {
   const listRef = useRef<FlatList<Segment>>(null);
 
   useEffect(() => {
@@ -31,6 +41,20 @@ export function PhaseList({ timeline, currentIndex, showSets, accent }: Props) {
   }, [currentIndex]);
 
   const remaining = timeline.segments.length - currentIndex - 1;
+  const { totalCycles } = timeline;
+
+  const renderItem: ListRenderItem<Segment> = useCallback(
+    ({ item, index }) => (
+      <Row
+        segment={item}
+        state={index < currentIndex ? 'done' : index === currentIndex ? 'current' : 'upcoming'}
+        showSets={showSets}
+        totalCycles={totalCycles}
+        accent={accent}
+      />
+    ),
+    [accent, currentIndex, showSets, totalCycles],
+  );
 
   return (
     <View style={styles.container}>
@@ -41,29 +65,29 @@ export function PhaseList({ timeline, currentIndex, showSets, accent }: Props) {
       <FlatList
         ref={listRef}
         data={timeline.segments}
-        keyExtractor={(_, index) => String(index)}
+        keyExtractor={keyExtractor}
         showsVerticalScrollIndicator={false}
         contentContainerStyle={styles.listContent}
-        // Fixed row height makes the scroll offset exact arithmetic rather than
-        // a layout guess, and lets the list skip measuring every row.
-        getItemLayout={(_, index) => ({
-          length: ROW_HEIGHT,
-          offset: ROW_HEIGHT * index,
-          index,
-        })}
-        renderItem={({ item, index }) => (
-          <Row
-            segment={item}
-            state={index < currentIndex ? 'done' : index === currentIndex ? 'current' : 'upcoming'}
-            showSets={showSets}
-            totalCycles={timeline.totalCycles}
-            accent={accent}
-          />
-        )}
+        getItemLayout={getItemLayout}
+        renderItem={renderItem}
+        // The queue is static for the whole session and every row is the same
+        // height, so the list can keep a tight window and recycle offscreen
+        // rows instead of holding the session in memory.
+        initialNumToRender={10}
+        maxToRenderPerBatch={8}
+        windowSize={7}
+        removeClippedSubviews
       />
     </View>
   );
 }
+
+/**
+ * The workout screen re-renders ~10x a second to drive the countdown ring.
+ * Nothing here changes at that rate — only when the phase does — so both the
+ * list and its rows are memoised, or every row would rebuild on every tick.
+ */
+export const PhaseList = React.memo(PhaseListInner);
 
 type RowState = 'done' | 'current' | 'upcoming';
 
@@ -75,7 +99,7 @@ function detailFor(segment: Segment, totalCycles: number, showSets: boolean): st
   return parts.length ? parts.join('  ·  ') : null;
 }
 
-function Row({
+const Row = React.memo(function Row({
   segment,
   state,
   showSets,
@@ -121,7 +145,7 @@ function Row({
             },
           ]}
         >
-          <Text style={[styles.badgeGlyph, { color: isCurrent ? '#000' : theme.textDim }]}>
+          <Text style={[styles.badgeGlyph, { color: isCurrent ? onAccent(accent) : theme.textDim }]}>
             {isDone ? '✓' : glyphFor(segment.phase)}
           </Text>
         </View>
@@ -152,7 +176,7 @@ function Row({
       </View>
     </View>
   );
-}
+});
 
 function glyphFor(phase: Segment['phase']): string {
   switch (phase) {

@@ -6,7 +6,10 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { PresetTabs } from '../components/PresetTabs';
 import { StepperRow } from '../components/StepperRow';
 import { formatDuration, totalSeconds } from '../models/config';
-import { phaseColors, theme } from '../theme';
+import { onAccent, phaseColors, theme } from '../theme';
+
+/** The session-summary card carries the brand gradient. */
+const SUMMARY_WASH = [theme.brand, theme.brandDeep] as const;
 import type { IntervalApp } from '../useIntervalApp';
 
 export function SetupScreen({ app }: { app: IntervalApp }) {
@@ -40,7 +43,7 @@ export function SetupScreen({ app }: { app: IntervalApp }) {
         </View>
 
         <LinearGradient
-          colors={['#FF6806', '#F97316']}
+          colors={SUMMARY_WASH}
           start={{ x: 0, y: 0 }}
           end={{ x: 1, y: 1 }}
           style={styles.summary}
@@ -194,5 +197,10 @@ const styles = StyleSheet.create({
     width: '100%',
     alignSelf: 'center',
   },
-  startText: { color: '#fff', fontSize: 16, fontWeight: '800', letterSpacing: 0.3 },
+  startText: {
+    color: onAccent(theme.brand),
+    fontSize: 16,
+    fontWeight: '800',
+    letterSpacing: 0.3,
+  },
 });

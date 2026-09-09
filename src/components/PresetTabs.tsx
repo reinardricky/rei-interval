@@ -2,7 +2,7 @@ import React, { useEffect, useRef, useState } from 'react';
 import { Modal, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 
 import { Preset, presetSummary } from '../models/preset';
-import { theme } from '../theme';
+import { onAccent, theme } from '../theme';
 import { NamePrompt } from './NamePrompt';
 
 type Props = {
@@ -244,16 +244,16 @@ const styles = StyleSheet.create({
   tabActive: { backgroundColor: theme.brand, borderColor: theme.brand },
   tabIdle: { backgroundColor: theme.surface, borderColor: theme.border },
   tabText: { fontSize: 14, fontWeight: '700', flexShrink: 1 },
-  tabTextActive: { color: '#fff' },
+  tabTextActive: { color: onAccent(theme.brand) },
   tabTextIdle: { color: theme.textDim },
-  tabMore: { color: '#fff', marginLeft: 8, fontSize: 14, fontWeight: '800' },
+  tabMore: { color: onAccent(theme.brand), marginLeft: 8, fontSize: 14, fontWeight: '800' },
   add: {
     width: 40,
     height: 40,
     borderRadius: 20,
     alignItems: 'center',
     justifyContent: 'center',
-    backgroundColor: 'rgba(255,104,6,0.16)',
+    backgroundColor: theme.brandWash,
   },
   addGlyph: { color: theme.brand, fontSize: 24, fontWeight: '600', lineHeight: 28 },
   sheetBackdrop: {
@@ -295,5 +295,5 @@ const styles = StyleSheet.create({
   confirmActions: { flexDirection: 'row', justifyContent: 'flex-end', gap: 8, marginTop: 8 },
   action: { paddingHorizontal: 18, paddingVertical: 11, borderRadius: 10 },
   cancelText: { color: theme.textDim, fontWeight: '700', fontSize: 15 },
-  confirmText: { color: '#fff', fontWeight: '800', fontSize: 15 },
+  confirmText: { color: onAccent(theme.danger), fontWeight: '800', fontSize: 15 },
 });

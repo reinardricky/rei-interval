@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { AppState } from 'react-native';
 import { activateKeepAwakeAsync, deactivateKeepAwake } from 'expo-keep-awake';
 
-import { initAudio, playCue } from './audio';
+import { initAudio, playCue, releaseAudio } from './audio';
 import { IntervalConfig, defaultConfig, sanitizeConfig } from './models/config';
 import {
   DEFAULT_PRESET_NAME,
@@ -10,7 +10,7 @@ import {
   createPreset,
   uniqueName,
 } from './models/preset';
-import { Timeline, buildTimeline, indexAt } from './models/timeline';
+import { CueEvent, Timeline, buildCueSchedule, buildTimeline, indexAt } from './models/timeline';
 import * as storage from './storage';
 
 export type Status = 'idle' | 'running' | 'paused' | 'completed';
@@ -18,6 +18,24 @@ export type Status = 'idle' | 'running' | 'paused' | 'completed';
 const KEEP_AWAKE_TAG = 'reis-interval-workout';
 /** Sample rate for the UI. Accuracy does not depend on it — see below. */
 const TICK_MS = 100;
+
+/**
+ * How far ahead of its nominal instant each cue is fired.
+ *
+ * A cue is not instantaneous: the call crosses into the audio module, the
+ * player is rewound, and Android's mixer adds output latency of its own before
+ * anything reaches the speaker. Firing exactly on the second therefore *sounds*
+ * late. This is the single number to tune if the beeps still sit behind the
+ * clock — raise it to pull them earlier.
+ */
+const CUE_LEAD_MS = 120;
+
+/**
+ * A cue this far behind the clock is stale and is dropped rather than fired
+ * against the wrong second. Skipping a phase walks the cursor past a run of
+ * cues that no longer belong to the session.
+ */
+const CUE_STALE_S = 0.25;
 
 export function useIntervalApp() {
   const [presets, setPresets] = useState<Preset[]>([]);
@@ -39,17 +57,19 @@ export function useIntervalApp() {
   const accumulatedRef = useRef(0);
   const skipRef = useRef(0);
   const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
-  const cuedSegmentRef = useRef(-1);
-  const cuedSecondRef = useRef(-1);
   const soundRef = useRef(true);
-  /** Mirrors `elapsed` so the tick loop need not depend on render state. */
-  const elapsedRef = useRef(0);
+  /** Cursor into `cueSchedule`: the next cue the session owes. */
+  const cueIndexRef = useRef(0);
+  const cueTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   /** Indirection so the interval always calls the latest `tick`. */
   const tickRef = useRef<() => void>(() => {});
+  /** Indirection so a fired cue can chain to the latest scheduler. */
+  const scheduleCuesRef = useRef<() => void>(() => {});
 
   soundRef.current = soundEnabled;
 
   const timeline: Timeline = useMemo(() => buildTimeline(config), [config]);
+  const cueSchedule: CueEvent[] = useMemo(() => buildCueSchedule(timeline), [timeline]);
 
   const readElapsed = useCallback(() => {
     const live = startedAtRef.current === null ? 0 : Date.now() - startedAtRef.current;
@@ -85,32 +105,65 @@ export function useIntervalApp() {
     };
   }, []);
 
+  /**
+   * Warm the audio pipeline as soon as the app settles, not on the start
+   * button. Building the players costs enough that the opening cue would
+   * otherwise be the one paying for it — and that cue marks second zero.
+   */
+  useEffect(() => {
+    if (!hydrated || !soundEnabled) return;
+    void initAudio();
+  }, [hydrated, soundEnabled]);
+
+  useEffect(() => () => releaseAudio(), []);
+
   // ── Cues ───────────────────────────────────────────────────────
-  const cueSegmentStart = useCallback(
-    (index: number) => {
-      cuedSegmentRef.current = index;
-      cuedSecondRef.current = -1;
-      if (!soundRef.current) return;
-      const segment = timeline.segments[index];
-      if (!segment) return;
-      playCue(segment.phase === 'work' ? 'work' : 'rest');
-    },
-    [timeline],
-  );
+  const clearCueTimer = useCallback(() => {
+    if (cueTimerRef.current !== null) {
+      clearTimeout(cueTimerRef.current);
+      cueTimerRef.current = null;
+    }
+  }, []);
 
   /**
-   * Counts down the last three seconds of a phase. Guarded on
-   * (segment, second) so a sampled loop cannot fire the same cue twice.
+   * Arms a timer for the next cue the session owes, aimed `CUE_LEAD_MS` ahead
+   * of its instant.
+   *
+   * Cues are scheduled rather than discovered by the sampling loop. Polling can
+   * only notice a boundary on the following sample, which put every beep up to
+   * a full tick late before the audio pipeline added anything; a timer aimed at
+   * the instant itself has no such floor. Each fired cue arms the next, so the
+   * chain re-derives its delay from the clock every time and cannot accumulate
+   * drift.
    */
-  const cueCountdown = useCallback((index: number, secondsLeft: number) => {
-    if (secondsLeft > 3 || secondsLeft < 1) return;
-    if (index === cuedSegmentRef.current && secondsLeft === cuedSecondRef.current) {
-      return;
+  const scheduleCues = useCallback(() => {
+    clearCueTimer();
+    // `startedAtRef` is the authority on "the clock is moving" — unlike
+    // `status`, it is current the instant the transport changes.
+    if (startedAtRef.current === null) return;
+
+    const now = readElapsed();
+    let index = cueIndexRef.current;
+    while (index < cueSchedule.length && cueSchedule[index].at < now - CUE_STALE_S) {
+      index++;
     }
-    cuedSegmentRef.current = index;
-    cuedSecondRef.current = secondsLeft;
-    if (soundRef.current) playCue('tick');
-  }, []);
+    cueIndexRef.current = index;
+
+    const event = cueSchedule[index];
+    if (!event) return;
+
+    cueTimerRef.current = setTimeout(
+      () => {
+        cueTimerRef.current = null;
+        cueIndexRef.current = index + 1;
+        if (soundRef.current) playCue(event.cue);
+        scheduleCuesRef.current();
+      },
+      Math.max(0, (event.at - now) * 1000 - CUE_LEAD_MS),
+    );
+  }, [clearCueTimer, cueSchedule, readElapsed]);
+
+  scheduleCuesRef.current = scheduleCues;
 
   // ── Transport ──────────────────────────────────────────────────
   const stopTicker = useCallback(() => {
@@ -122,35 +175,29 @@ export function useIntervalApp() {
 
   const finish = useCallback(() => {
     stopTicker();
+    clearCueTimer();
     startedAtRef.current = null;
     setElapsed(timeline.totalDuration);
     setStatus('completed');
-    if (soundRef.current) playCue('complete');
+    // The scheduler normally sounds this a beat before the clock runs out. Only
+    // fire it here if the session ended some other way — a throttled timer, or
+    // a skip through the final phase.
+    if (cueIndexRef.current < cueSchedule.length && soundRef.current) playCue('complete');
+    cueIndexRef.current = cueSchedule.length;
     void deactivateKeepAwake(KEEP_AWAKE_TAG);
-  }, [stopTicker, timeline.totalDuration]);
+  }, [clearCueTimer, cueSchedule.length, stopTicker, timeline.totalDuration]);
 
+  /** Drives the display only. Cues run on their own schedule, so a late or
+   *  coalesced tick costs animation smoothness and nothing audible. */
   const tick = useCallback(() => {
     const now = readElapsed();
     if (now >= timeline.totalDuration) {
       finish();
       return;
     }
-    const previous = indexAt(timeline, elapsedRef.current);
-    const current = indexAt(timeline, now);
-    elapsedRef.current = now;
     setElapsed(now);
+  }, [finish, readElapsed, timeline.totalDuration]);
 
-    if (current !== previous) {
-      cueSegmentStart(current);
-    } else {
-      const segment = timeline.segments[current];
-      if (segment) {
-        cueCountdown(current, Math.ceil(segment.start + segment.duration - now));
-      }
-    }
-  }, [cueCountdown, cueSegmentStart, finish, readElapsed, timeline]);
-
-  elapsedRef.current = elapsed;
   tickRef.current = tick;
 
   const startTicker = useCallback(() => {
@@ -165,26 +212,26 @@ export function useIntervalApp() {
       startedAtRef.current = Date.now();
       setStatus('running');
       startTicker();
+      scheduleCues();
       void activateKeepAwakeAsync(KEEP_AWAKE_TAG);
       return;
     }
 
-    // Init on a user gesture so the first cue is not the one that warms up the
-    // audio pipeline.
+    // Normally a no-op: the pipeline was warmed at mount. Kept as a fallback
+    // for the case where sound was toggled on a moment ago.
     void initAudio();
 
     accumulatedRef.current = 0;
     skipRef.current = 0;
-    cuedSegmentRef.current = -1;
-    cuedSecondRef.current = -1;
-    elapsedRef.current = 0;
+    cueIndexRef.current = 0;
     startedAtRef.current = Date.now();
     setElapsed(0);
     setStatus('running');
     startTicker();
-    cueSegmentStart(0);
+    // The opening cue sits at offset 0, so this arms it for right now.
+    scheduleCues();
     void activateKeepAwakeAsync(KEEP_AWAKE_TAG);
-  }, [cueSegmentStart, startTicker, status, timeline.segments.length]);
+  }, [scheduleCues, startTicker, status, timeline.segments.length]);
 
   const pause = useCallback(() => {
     if (status !== 'running') return;
@@ -193,10 +240,11 @@ export function useIntervalApp() {
       startedAtRef.current = null;
     }
     stopTicker();
+    clearCueTimer();
     setElapsed(readElapsed());
     setStatus('paused');
     void deactivateKeepAwake(KEEP_AWAKE_TAG);
-  }, [readElapsed, status, stopTicker]);
+  }, [clearCueTimer, readElapsed, status, stopTicker]);
 
   const toggle = useCallback(() => {
     if (status === 'running') pause();
@@ -205,16 +253,15 @@ export function useIntervalApp() {
 
   const reset = useCallback(() => {
     stopTicker();
+    clearCueTimer();
     startedAtRef.current = null;
     accumulatedRef.current = 0;
     skipRef.current = 0;
-    cuedSegmentRef.current = -1;
-    cuedSecondRef.current = -1;
-    elapsedRef.current = 0;
+    cueIndexRef.current = 0;
     setElapsed(0);
     setStatus('idle');
     void deactivateKeepAwake(KEEP_AWAKE_TAG);
-  }, [stopTicker]);
+  }, [clearCueTimer, stopTicker]);
 
   /** Credits the remainder of the current phase to the skip offset. */
   const skip = useCallback(() => {
@@ -230,21 +277,32 @@ export function useIntervalApp() {
       finish();
       return;
     }
-    elapsedRef.current = next;
     setElapsed(next);
-    cueSegmentStart(indexAt(timeline, next));
-  }, [cueSegmentStart, finish, readElapsed, status, timeline]);
+    // Re-arming walks the cursor past every cue the jump swallowed and fires
+    // the one opening the new phase, which is now due.
+    scheduleCues();
+  }, [finish, readElapsed, scheduleCues, status, timeline]);
 
   // Returning to the foreground resyncs immediately rather than waiting for the
   // next tick, so the clock is never visibly stale.
   useEffect(() => {
     const sub = AppState.addEventListener('change', (next) => {
-      if (next === 'active' && status === 'running') tickRef.current();
+      if (next !== 'active' || status !== 'running') return;
+      tickRef.current();
+      // Background throttling leaves the pending cue timer aimed at a stale
+      // delay; re-derive it from the clock.
+      scheduleCuesRef.current();
     });
     return () => sub.remove();
   }, [status]);
 
-  useEffect(() => () => stopTicker(), [stopTicker]);
+  useEffect(
+    () => () => {
+      stopTicker();
+      clearCueTimer();
+    },
+    [clearCueTimer, stopTicker],
+  );
 
   // ── Config & presets ───────────────────────────────────────────
   const isActive = status === 'running' || status === 'paused';

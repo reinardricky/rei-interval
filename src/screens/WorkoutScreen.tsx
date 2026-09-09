@@ -1,13 +1,14 @@
-import React from 'react';
+import React, { useMemo } from 'react';
 import { Pressable, StyleSheet, Text, View, useWindowDimensions } from 'react-native';
 import { LinearGradient } from 'expo-linear-gradient';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { PhaseClock } from '../components/PhaseClock';
 import { PhaseList } from '../components/PhaseList';
+import { TransportIcon, type TransportIconName } from '../components/TransportIcon';
 import { formatClock } from '../models/config';
 import { phaseLabel } from '../models/timeline';
-import { pausedColor, phaseColors, theme, tint } from '../theme';
+import { onAccent, pausedColor, phaseColors, theme, tint } from '../theme';
 import type { IntervalApp } from '../useIntervalApp';
 
 /**
@@ -29,9 +30,16 @@ export function WorkoutScreen({ app }: { app: IntervalApp }) {
     Math.min(300, Math.min(height * 0.34, width * 0.74)),
   );
 
+  // A fresh array every tick would push a new gradient across to the native
+  // view ten times a second for a wash that only changes when the phase does.
+  const wash = useMemo(
+    () => [tint(accent, 0.42), tint(accent, 0.12), theme.base] as const,
+    [accent],
+  );
+
   return (
     <LinearGradient
-      colors={[tint(accent, 0.42), tint(accent, 0.12), theme.base]}
+      colors={wash}
       locations={[0, 0.34, 0.7]}
       style={styles.root}
     >
@@ -81,37 +89,37 @@ export function WorkoutScreen({ app }: { app: IntervalApp }) {
       </View>
 
       <View style={[styles.controls, { paddingBottom: insets.bottom + 16 }]}>
-        <RoundButton glyph="↻" label="Reset" onPress={app.reset} size={54} />
+        <RoundButton icon="reset" label="Reset" onPress={app.reset} size={54} />
         <RoundButton
-          glyph={app.status === 'running' ? '❚❚' : '▶'}
+          icon={app.status === 'running' ? 'pause' : 'play'}
           label={app.status === 'running' ? 'Pause' : 'Resume'}
           onPress={app.toggle}
           size={78}
           fill={accent}
         />
-        <RoundButton glyph="⏭" label="Skip phase" onPress={app.skip} size={54} />
+        <RoundButton icon="skip" label="Skip phase" onPress={app.skip} size={54} />
       </View>
     </LinearGradient>
   );
 }
 
-function Chip({ label, value }: { label: string; value: string }) {
+const Chip = React.memo(function Chip({ label, value }: { label: string; value: string }) {
   return (
     <View style={styles.chip}>
       <Text style={styles.chipLabel}>{label.toUpperCase()}</Text>
       <Text style={styles.chipValue}>{value}</Text>
     </View>
   );
-}
+});
 
-function RoundButton({
-  glyph,
+const RoundButton = React.memo(function RoundButton({
+  icon,
   label,
   onPress,
   size,
   fill,
 }: {
-  glyph: string;
+  icon: TransportIconName;
   label: string;
   onPress: () => void;
   size: number;
@@ -132,18 +140,14 @@ function RoundButton({
         },
       ]}
     >
-      <Text
-        style={{
-          color: fill ? '#000' : '#fff',
-          fontSize: size * 0.34,
-          fontWeight: '700',
-        }}
-      >
-        {glyph}
-      </Text>
+      <TransportIcon
+        name={icon}
+        size={Math.round(size * 0.42)}
+        color={fill ? onAccent(fill) : theme.text}
+      />
     </Pressable>
   );
-}
+});
 
 const styles = StyleSheet.create({
   root: { flex: 1, backgroundColor: theme.base },
