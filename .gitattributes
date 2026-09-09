@@ -1,0 +1,5 @@
+# The Gradle wrapper must keep LF endings or it will not run under sh.
+gradlew text eol=lf
+*.bat text eol=crlf
+*.jar binary
+*.keystore binary
