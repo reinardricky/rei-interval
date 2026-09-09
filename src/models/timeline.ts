@@ -124,3 +124,34 @@ export function buildCueSchedule(timeline: Timeline): CueEvent[] {
 
   return events.sort((a, b) => a.at - b.at);
 }
+
+/**
+ * The cue owed at `now`, and where the cursor moves to.
+ *
+ * Deliberately a *lookup*, not a chain: it takes the clock and a cursor and
+ * re-derives the answer from scratch every time. A scheduler that arms each cue
+ * from the previous one has a single point of failure — one link that fails to
+ * arm silently kills every cue after it — whereas a lookup driven by the
+ * sampling loop simply catches up on the next sample.
+ *
+ * `lead` fires a cue slightly before its instant, to cover the latency between
+ * asking for a sound and hearing it. `stale` walks the cursor past cues the
+ * clock has already left behind, so skipping a phase does not empty the whole
+ * queue of swallowed cues at once.
+ */
+export function nextDueCue(
+  schedule: CueEvent[],
+  cursor: number,
+  now: number,
+  lead: number,
+  stale: number,
+): { cue: CueName | null; cursor: number } {
+  let index = cursor;
+  while (index < schedule.length && schedule[index].at < now - stale) index++;
+
+  const event = schedule[index];
+  if (event && event.at <= now + lead) {
+    return { cue: event.cue, cursor: index + 1 };
+  }
+  return { cue: null, cursor: index };
+}

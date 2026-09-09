@@ -1,0 +1,16 @@
+plugins {
+  id 'com.android.library'
+  id 'expo-module-gradle-plugin'
+}
+
+// expo-module-gradle-plugin requires this metadata even for a local module.
+group = 'com.reinardricky.reisinterval'
+version = '1.0.0'
+
+android {
+  namespace "expo.modules.cueplayer"
+  defaultConfig {
+    versionCode 1
+    versionName '1.0.0'
+  }
+}

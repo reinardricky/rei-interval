@@ -42,3 +42,7 @@ yarn-error.*
 # Build output
 *.apk
 *.aab
+
+# Local native module build output
+modules/*/android/build/
+modules/*/android/.cxx/

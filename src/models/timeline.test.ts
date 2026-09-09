@@ -1,5 +1,5 @@
 import { defaultConfig, sanitizeConfig, totalSeconds } from './config';
-import { buildCueSchedule, buildTimeline, indexAt } from './timeline';
+import { buildCueSchedule, buildTimeline, indexAt, nextDueCue } from './timeline';
 import { parsePresets, uniqueName, type Preset } from './preset';
 
 describe('timeline', () => {
@@ -133,6 +133,115 @@ describe('cue schedule', () => {
     const openings = buildCueSchedule(timeline).filter((event) => event.cue !== 'tick');
     // One per segment, plus the completion cue.
     expect(openings).toHaveLength(timeline.segments.length + 1);
+  });
+});
+
+describe('cue lookup', () => {
+  const LEAD = 0.12;
+  const STALE = 0.25;
+  const TICK = 0.1;
+
+  /** Walks a session at the real sample rate, collecting what was sounded. */
+  function run(timeline: ReturnType<typeof buildTimeline>, from = 0) {
+    const schedule = buildCueSchedule(timeline);
+    const fired: { at: number; cue: string }[] = [];
+    let cursor = 0;
+    for (let now = from; now < timeline.totalDuration; now += TICK) {
+      const due = nextDueCue(schedule, cursor, now, LEAD, STALE);
+      cursor = due.cursor;
+      if (due.cue) fired.push({ at: Number(now.toFixed(2)), cue: due.cue });
+    }
+    return fired;
+  }
+
+  const timeline = buildTimeline({
+    prepareSeconds: 5,
+    workSeconds: 6,
+    restSeconds: 4,
+    cycles: 2,
+    sets: 1,
+    setRestSeconds: 0,
+  });
+
+  it('sounds every cue in the schedule exactly once, in order', () => {
+    const schedule = buildCueSchedule(timeline);
+    // Including the completion cue: the lead pulls it onto the last sample
+    // before the clock runs out.
+    expect(run(timeline).map((f) => f.cue)).toEqual(schedule.map((e) => e.cue));
+  });
+
+  it('never fires a cue late, and never earlier than the lead', () => {
+    const schedule = buildCueSchedule(timeline);
+    run(timeline).forEach((f, i) => {
+      const early = schedule[i].at - f.at;
+      if (schedule[i].at === 0) {
+        // Nothing precedes offset 0, so the opening cue lands exactly on it.
+        expect(early).toBe(0);
+        return;
+      }
+      // Firing is quantised to the sample grid, so a cue lands on the last
+      // sample before its instant: strictly early, by at most the lead. Raising
+      // CUE_LEAD_S only moves this once it crosses a multiple of TICK_MS.
+      expect(early).toBeGreaterThan(0);
+      expect(early).toBeLessThanOrEqual(LEAD + 1e-9);
+    });
+  });
+
+  it('counts down the last three seconds of each phase', () => {
+    // Work runs 5..11, so its countdown ticks belong to seconds 8, 9 and 10.
+    const ticks = buildCueSchedule(timeline)
+      .filter((e) => e.cue === 'tick' && e.at >= 5 && e.at < 11)
+      .map((e) => e.at);
+    expect(ticks).toEqual([8, 9, 10]);
+  });
+
+  it('recovers after a stalled run of samples instead of dying', () => {
+    const schedule = buildCueSchedule(timeline);
+    // Nothing sampled since the session began. A chain armed from the previous
+    // cue would be dead here; the lookup just answers for the clock it is given
+    // and sounds the cue that is due now.
+    const due = nextDueCue(schedule, 0, 3.05, LEAD, STALE);
+    expect(due.cue).toBe('tick'); // prepare runs 0..5, so this is "2 to go"
+    expect(schedule[due.cursor - 1].at).toBe(3);
+  });
+
+  // SOUNDPOOL_LEAD_S and EXPO_AUDIO_LEAD_S in audio.ts. A lead approaching the
+  // 1s gap between countdown ticks would start pulling cues out of order, so
+  // both shipped values are walked rather than assumed safe.
+  it.each([
+    ['soundpool', 0.05],
+    ['expo-audio', 0.6],
+  ])('still sequences correctly at the %s lead', (_backend, lead) => {
+    const schedule = buildCueSchedule(timeline);
+    const fired: string[] = [];
+    let cursor = 0;
+    for (let now = 0; now < timeline.totalDuration; now += TICK) {
+      const due = nextDueCue(schedule, cursor, now, lead, STALE);
+      cursor = due.cursor;
+      if (due.cue) fired.push(due.cue);
+    }
+    // The completion cue sits exactly on totalDuration — past the last sample a
+    // running clock takes. Only a lead of at least one tick pulls it back onto
+    // the grid; below that `finish()` owns it, which is why the engine sounds
+    // it there when the cursor has not already consumed it.
+    const beforeEnd = schedule
+      .filter((e) => e.at < timeline.totalDuration)
+      .map((e) => e.cue);
+    expect(fired).toEqual(lead >= TICK ? schedule.map((e) => e.cue) : beforeEnd);
+  });
+
+  it('drops a cue the clock has left behind rather than firing it late', () => {
+    const schedule = buildCueSchedule(timeline);
+    // 0.9s past the tick at 4: too late to mean anything, so it is skipped and
+    // the phase-opening cue at 5 is what sounds.
+    expect(nextDueCue(schedule, 0, 4.9, LEAD, STALE).cue).toBe('work');
+  });
+
+  it('walks past cues a skip jumped over rather than firing a burst', () => {
+    const schedule = buildCueSchedule(timeline);
+    // Jumping from the start of prepare to the start of work skips 3 ticks.
+    const due = nextDueCue(schedule, 0, 5, LEAD, STALE);
+    expect(due.cue).toBe('work');
   });
 });
 
