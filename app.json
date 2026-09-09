@@ -1,0 +1,32 @@
+{
+  "expo": {
+    "name": "Rei's Interval",
+    "slug": "reis-interval",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "icon": "./assets/icon.png",
+    "scheme": "reisinterval",
+    "userInterfaceStyle": "dark",
+    "backgroundColor": "#0E0E10",
+    "splash": {
+      "image": "./assets/splash-icon.png",
+      "resizeMode": "contain",
+      "backgroundColor": "#0E0E10"
+    },
+    "android": {
+      "package": "com.reinardricky.reisinterval",
+      "adaptiveIcon": {
+        "backgroundColor": "#0E0E10",
+        "foregroundImage": "./assets/android-icon-foreground.png",
+        "monochromeImage": "./assets/android-icon-monochrome.png"
+      },
+      "predictiveBackGestureEnabled": false,
+      "edgeToEdgeEnabled": true
+    },
+    "ios": {
+      "supportsTablet": true,
+      "bundleIdentifier": "com.reinardricky.reisinterval"
+    },
+    "plugins": ["expo-audio"]
+  }
+}
