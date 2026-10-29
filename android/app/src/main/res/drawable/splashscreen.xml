@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  The splash window background.
+
+  splashscreen_logo is a square mark, so it cannot be the window background on
+  its own — Android stretches a bare bitmap to the window bounds and the face
+  distorts on anything that is not square. Centring it over a solid fill keeps
+  it the same size and shape on every screen.
+-->
+<layer-list xmlns:android="http://schemas.android.com/apk/res/android">
+  <item android:drawable="@color/splashscreen_background"/>
+  <item>
+    <bitmap
+      android:src="@drawable/splashscreen_logo"
+      android:gravity="center"/>
+  </item>
+</layer-list>

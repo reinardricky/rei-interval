@@ -12,7 +12,8 @@
     "aab": "cd android && gradlew bundleRelease",
     "clean:android": "cd android && gradlew clean",
     "test": "jest",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "icons": "node tools/make-icons.mjs"
   },
   "dependencies": {
     "@react-native-async-storage/async-storage": "2.2.0",
@@ -31,6 +32,7 @@
     "@types/jest": "^30.0.0",
     "@types/react": "~19.2.2",
     "jest": "^30.0.0",
+    "sharp": "^0.35.4",
     "ts-jest": "^29.4.0",
     "typescript": "~6.0.3"
   },
