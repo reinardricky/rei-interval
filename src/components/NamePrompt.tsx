@@ -17,16 +17,18 @@ type Props = {
   title: string;
   initialValue: string;
   actionLabel: string;
+  placeholder?: string;
   onCancel: () => void;
   onSubmit: (name: string) => void;
 };
 
-/** Small modal for naming and renaming preset tabs. */
+/** Small modal for naming and renaming tabs. */
 export function NamePrompt({
   visible,
   title,
   initialValue,
   actionLabel,
+  placeholder = 'e.g. Fingerboard',
   onCancel,
   onSubmit,
 }: Props) {
@@ -54,7 +56,7 @@ export function NamePrompt({
               autoFocus
               selectTextOnFocus
               maxLength={28}
-              placeholder="e.g. Fingerboard"
+              placeholder={placeholder}
               placeholderTextColor={theme.textFaint}
               style={styles.input}
               returnKeyType="done"

@@ -14,18 +14,43 @@ export type Segment = {
   phase: Phase;
   /** Seconds. */
   duration: number;
-  /** 1-based position within the session. */
+  /** 1-based position within the exercise. */
   cycle: number;
   set: number;
   /** Offset from session start, in seconds. */
   start: number;
+  /** Index into `Timeline.blocks`: the exercise this segment belongs to. */
+  block: number;
+  /**
+   * The break between two exercises of a circuit. It belongs to the exercise
+   * coming up, so during it the screen already shows what is next.
+   */
+  between: boolean;
+};
+
+/** One exercise of the session: a single preset, or one step of a circuit. */
+export type Block = {
+  name: string;
+  cycles: number;
+  sets: number;
 };
 
 export type Timeline = {
   segments: Segment[];
   totalDuration: number;
   workCount: number;
-  totalCycles: number;
+  blocks: Block[];
+  /**
+   * Offsets at which the session stops and waits for a tap before carrying on,
+   * ascending. Each sits on the opening of an exercise.
+   */
+  holds: number[];
+};
+
+/** One exercise of a circuit, resolved to the intervals it runs. */
+export type CircuitStep = {
+  name: string;
+  config: IntervalConfig;
 };
 
 /**
@@ -35,36 +60,68 @@ export type Timeline = {
  * becomes a lookup against elapsed time rather than a pile of mutable counters,
  * so skip, progress and the up-next list all fall out of the same structure.
  */
-export function buildTimeline(config: IntervalConfig): Timeline {
+export function buildTimeline(config: IntervalConfig, name = ''): Timeline {
+  return buildCircuitTimeline([{ name, config }]);
+}
+
+/**
+ * Chains several setups into one continuous session.
+ *
+ * Only the opening exercise gets its prepare countdown: after that the athlete
+ * is already warm and moving. The break between two exercises is the earlier
+ * one's set rest, so finishing an exercise earns the same recovery as finishing
+ * one of its sets.
+ */
+export function buildCircuitTimeline(steps: CircuitStep[], pauseBetween = false): Timeline {
   const segments: Segment[] = [];
+  const blocks: Block[] = [];
+  const holds: number[] = [];
   let cursor = 0;
 
-  const add = (phase: Phase, duration: number, cycle: number, set: number) => {
+  const add = (
+    phase: Phase,
+    duration: number,
+    cycle: number,
+    set: number,
+    block: number,
+    between = false,
+  ) => {
     if (duration <= 0) return;
-    segments.push({ phase, duration, cycle, set, start: cursor });
+    segments.push({ phase, duration, cycle, set, start: cursor, block, between });
     cursor += duration;
   };
 
-  const cycles = Math.max(1, config.cycles);
-  const sets = Math.max(1, config.sets);
+  steps.forEach(({ name, config }, block) => {
+    const cycles = Math.max(1, config.cycles);
+    const sets = Math.max(1, config.sets);
+    blocks.push({ name, cycles, sets });
 
-  add('prepare', config.prepareSeconds, 1, 1);
-
-  for (let set = 1; set <= sets; set++) {
-    for (let cycle = 1; cycle <= cycles; cycle++) {
-      add('work', config.workSeconds, cycle, set);
-      // No plain rest after the final cycle — the set rest (or the end of the
-      // session) covers that recovery instead.
-      if (cycle < cycles) add('rest', config.restSeconds, cycle, set);
+    if (block === 0) {
+      add('prepare', config.prepareSeconds, 1, 1, block);
+    } else {
+      add('setRest', steps[block - 1].config.setRestSeconds, 1, 1, block, true);
+      // Held after the break rather than before it, so the recovery still runs
+      // on its own and the wait only covers getting set up.
+      if (pauseBetween) holds.push(cursor);
     }
-    if (set < sets) add('setRest', config.setRestSeconds, cycles, set);
-  }
+
+    for (let set = 1; set <= sets; set++) {
+      for (let cycle = 1; cycle <= cycles; cycle++) {
+        add('work', config.workSeconds, cycle, set, block);
+        // No plain rest after the final cycle — the set rest (or the end of the
+        // exercise) covers that recovery instead.
+        if (cycle < cycles) add('rest', config.restSeconds, cycle, set, block);
+      }
+      if (set < sets) add('setRest', config.setRestSeconds, cycles, set, block);
+    }
+  });
 
   return {
     segments,
     totalDuration: cursor,
     workCount: segments.filter((s) => s.phase === 'work').length,
-    totalCycles: cycles,
+    blocks,
+    holds,
   };
 }
 

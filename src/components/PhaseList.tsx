@@ -2,7 +2,7 @@ import React, { useCallback, useEffect, useRef } from 'react';
 import { FlatList, type ListRenderItem, StyleSheet, Text, View } from 'react-native';
 
 import { formatDuration } from '../models/config';
-import { Segment, Timeline, phaseLabel } from '../models/timeline';
+import { Block, Segment, Timeline, phaseLabel } from '../models/timeline';
 import { onAccent, theme } from '../theme';
 
 export const ROW_HEIGHT = 72;
@@ -25,12 +25,13 @@ const getItemLayout = (_: ArrayLike<Segment> | null | undefined, index: number) 
 type Props = {
   timeline: Timeline;
   currentIndex: number;
-  showSets: boolean;
+  /** Name the exercise on every row — for circuits, where there is more than one. */
+  showExercise: boolean;
   accent: string;
 };
 
 /** The whole session as a queue, current phase highlighted and auto-scrolled. */
-function PhaseListInner({ timeline, currentIndex, showSets, accent }: Props) {
+function PhaseListInner({ timeline, currentIndex, showExercise, accent }: Props) {
   const listRef = useRef<FlatList<Segment>>(null);
 
   useEffect(() => {
@@ -41,19 +42,18 @@ function PhaseListInner({ timeline, currentIndex, showSets, accent }: Props) {
   }, [currentIndex]);
 
   const remaining = timeline.segments.length - currentIndex - 1;
-  const { totalCycles } = timeline;
+  const { blocks } = timeline;
 
   const renderItem: ListRenderItem<Segment> = useCallback(
     ({ item, index }) => (
       <Row
         segment={item}
         state={index < currentIndex ? 'done' : index === currentIndex ? 'current' : 'upcoming'}
-        showSets={showSets}
-        totalCycles={totalCycles}
+        detail={detailFor(item, blocks, showExercise)}
         accent={accent}
       />
     ),
-    [accent, currentIndex, showSets, totalCycles],
+    [accent, blocks, currentIndex, showExercise],
   );
 
   return (
@@ -91,30 +91,33 @@ export const PhaseList = React.memo(PhaseListInner);
 
 type RowState = 'done' | 'current' | 'upcoming';
 
-function detailFor(segment: Segment, totalCycles: number, showSets: boolean): string | null {
-  if (segment.phase === 'prepare') return 'Get ready';
-  const parts: string[] = [];
-  if (segment.phase !== 'setRest') parts.push(`Cycle ${segment.cycle} of ${totalCycles}`);
-  if (showSets) parts.push(`Set ${segment.set}`);
+function detailFor(segment: Segment, blocks: Block[], showExercise: boolean): string | null {
+  const block = blocks[segment.block];
+  if (!block) return null;
+  if (segment.between) return `Next: ${block.name}`;
+  const parts: string[] = showExercise ? [block.name] : [];
+  if (segment.phase === 'prepare') {
+    parts.push('Get ready');
+  } else {
+    if (segment.phase !== 'setRest') parts.push(`Cycle ${segment.cycle} of ${block.cycles}`);
+    if (block.sets > 1) parts.push(`Set ${segment.set}`);
+  }
   return parts.length ? parts.join('  ·  ') : null;
 }
 
 const Row = React.memo(function Row({
   segment,
   state,
-  showSets,
-  totalCycles,
+  detail,
   accent,
 }: {
   segment: Segment;
   state: RowState;
-  showSets: boolean;
-  totalCycles: number;
+  detail: string | null;
   accent: string;
 }) {
   const isCurrent = state === 'current';
   const isDone = state === 'done';
-  const detail = detailFor(segment, totalCycles, showSets);
 
   return (
     <View style={styles.rowOuter}>

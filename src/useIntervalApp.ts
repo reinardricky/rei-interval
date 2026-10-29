@@ -3,6 +3,12 @@ import { AppState } from 'react-native';
 import { activateKeepAwakeAsync, deactivateKeepAwake } from 'expo-keep-awake';
 
 import { cueLeadSeconds, initAudio, playCue, releaseAudio } from './audio';
+import {
+  Circuit,
+  Mode,
+  createCircuit as makeCircuit,
+  resolveSteps,
+} from './models/circuit';
 import { IntervalConfig, defaultConfig, sanitizeConfig } from './models/config';
 import {
   DEFAULT_PRESET_NAME,
@@ -13,6 +19,7 @@ import {
 import {
   CueEvent,
   Timeline,
+  buildCircuitTimeline,
   buildCueSchedule,
   buildTimeline,
   indexAt,
@@ -33,12 +40,22 @@ const TICK_MS = 100;
  */
 const CUE_STALE_S = 0.25;
 
-export function useIntervalApp() {
+type Options = {
+  /** Called when a fresh session starts — not on resuming one. */
+  onSessionStart?: () => void;
+};
+
+export function useIntervalApp({ onSessionStart }: Options = {}) {
   const [presets, setPresets] = useState<Preset[]>([]);
   const [activeId, setActiveId] = useState<string>('');
   const [config, setConfig] = useState<IntervalConfig>(defaultConfig);
+  const [circuits, setCircuits] = useState<Circuit[]>([]);
+  const [activeCircuitId, setActiveCircuitId] = useState<string>('');
+  const [mode, setMode] = useState<Mode>('presets');
   const [status, setStatus] = useState<Status>('idle');
   const [elapsed, setElapsed] = useState(0); // seconds
+  /** Paused by the circuit itself, waiting for a tap to open the next exercise. */
+  const [held, setHeld] = useState(false);
   const [soundEnabled, setSoundEnabled] = useState(true);
   const [hydrated, setHydrated] = useState(false);
 
@@ -56,12 +73,24 @@ export function useIntervalApp() {
   const soundRef = useRef(true);
   /** Cursor into `cueSchedule`: the next cue the session owes. */
   const cueIndexRef = useRef(0);
+  /** Cursor into `timeline.holds`: the next hold the session will stop at. */
+  const holdIndexRef = useRef(0);
   /** Indirection so the interval always calls the latest `tick`. */
   const tickRef = useRef<() => void>(() => {});
+  const onSessionStartRef = useRef(onSessionStart);
 
   soundRef.current = soundEnabled;
+  onSessionStartRef.current = onSessionStart;
 
-  const timeline: Timeline = useMemo(() => buildTimeline(config), [config]);
+  const activePreset = presets.find((p) => p.id === activeId);
+  const activeCircuit = circuits.find((c) => c.id === activeCircuitId) ?? null;
+  const isCircuit = mode === 'circuits';
+
+  const timeline: Timeline = useMemo(() => {
+    if (!isCircuit) return buildTimeline(config, activePreset?.name);
+    if (!activeCircuit) return buildCircuitTimeline([]);
+    return buildCircuitTimeline(resolveSteps(activeCircuit, presets), activeCircuit.pauseBetween);
+  }, [activeCircuit, activePreset?.name, config, isCircuit, presets]);
   const cueSchedule: CueEvent[] = useMemo(() => buildCueSchedule(timeline), [timeline]);
 
   const readElapsed = useCallback(() => {
@@ -73,11 +102,15 @@ export function useIntervalApp() {
   useEffect(() => {
     let cancelled = false;
     (async () => {
-      const [stored, storedId, sound] = await Promise.all([
-        storage.loadPresets(),
-        storage.loadActivePresetId(),
-        storage.loadSoundEnabled(),
-      ]);
+      const [stored, storedId, sound, storedCircuits, storedCircuitId, storedMode] =
+        await Promise.all([
+          storage.loadPresets(),
+          storage.loadActivePresetId(),
+          storage.loadSoundEnabled(),
+          storage.loadCircuits(),
+          storage.loadActiveCircuitId(),
+          storage.loadMode(),
+        ]);
       if (cancelled) return;
 
       let list = stored;
@@ -86,10 +119,15 @@ export function useIntervalApp() {
         void storage.savePresets(list);
       }
       const active = list.find((p) => p.id === storedId) ?? list[0];
+      const circuit =
+        storedCircuits.find((c) => c.id === storedCircuitId) ?? storedCircuits[0];
 
       setPresets(list);
       setActiveId(active.id);
       setConfig(sanitizeConfig(active.config));
+      setCircuits(storedCircuits);
+      setActiveCircuitId(circuit?.id ?? '');
+      setMode(storedMode);
       setSoundEnabled(sound);
       setHydrated(true);
     })();
@@ -123,6 +161,7 @@ export function useIntervalApp() {
     startedAtRef.current = null;
     setElapsed(timeline.totalDuration);
     setStatus('completed');
+    setHeld(false);
     // The scheduler normally sounds this a beat before the clock runs out. Only
     // fire it here if the session ended some other way — a throttled timer, or
     // a skip through the final phase.
@@ -131,8 +170,32 @@ export function useIntervalApp() {
     void deactivateKeepAwake(KEEP_AWAKE_TAG);
   }, [cueSchedule.length, stopTicker, timeline.totalDuration]);
 
+  /**
+   * Stops the clock exactly on a hold, however late the sample that noticed
+   * it: the wait belongs to nobody, so none of it is charged to the exercise
+   * that follows. Keep-awake stays on — the screen is what tells the athlete
+   * what to set up next.
+   */
+  const holdAt = useCallback(
+    (offset: number) => {
+      stopTicker();
+      startedAtRef.current = null;
+      accumulatedRef.current = (offset - skipRef.current) * 1000;
+      holdIndexRef.current += 1;
+      setElapsed(offset);
+      setStatus('paused');
+      setHeld(true);
+    },
+    [stopTicker],
+  );
+
   const tick = useCallback(() => {
     const now = readElapsed();
+    const hold = timeline.holds[holdIndexRef.current];
+    if (hold !== undefined && now >= hold) {
+      holdAt(hold);
+      return;
+    }
     if (now >= timeline.totalDuration) {
       finish();
       return;
@@ -142,18 +205,17 @@ export function useIntervalApp() {
     // Cues are looked up against the clock on every sample. A missed or late
     // tick therefore costs nothing beyond that sample — the next one asks the
     // same question again and catches up.
-    const due = nextDueCue(
-      cueSchedule,
-      cueIndexRef.current,
-      now,
-      // Asked for per sample: the backend, and so the latency it has to cover,
-      // is only settled once audio has warmed up.
-      cueLeadSeconds(),
-      CUE_STALE_S,
-    );
+    //
+    // Asked for per sample: the backend, and so the latency it has to cover,
+    // is only settled once audio has warmed up. The lead never reaches across
+    // a hold, or the cue opening the next exercise would sound while the
+    // session is still waiting for the tap.
+    const lead =
+      hold === undefined ? cueLeadSeconds() : Math.min(cueLeadSeconds(), hold - now - 0.001);
+    const due = nextDueCue(cueSchedule, cueIndexRef.current, now, lead, CUE_STALE_S);
     cueIndexRef.current = due.cursor;
     if (due.cue && soundRef.current) playCue(due.cue);
-  }, [cueSchedule, finish, readElapsed, timeline.totalDuration]);
+  }, [cueSchedule, finish, holdAt, readElapsed, timeline.holds, timeline.totalDuration]);
 
   tickRef.current = tick;
 
@@ -171,6 +233,7 @@ export function useIntervalApp() {
     if (status === 'paused') {
       startedAtRef.current = Date.now();
       setStatus('running');
+      setHeld(false);
       startTicker();
       void activateKeepAwakeAsync(KEEP_AWAKE_TAG);
       return;
@@ -183,13 +246,16 @@ export function useIntervalApp() {
     accumulatedRef.current = 0;
     skipRef.current = 0;
     cueIndexRef.current = 0;
+    holdIndexRef.current = 0;
     startedAtRef.current = Date.now();
     setElapsed(0);
     setStatus('running');
+    setHeld(false);
     // Sounds the cue opening the first phase as a side effect of its first
     // sample, so the workout starts on a beep rather than in silence.
     startTicker();
     void activateKeepAwakeAsync(KEEP_AWAKE_TAG);
+    onSessionStartRef.current?.();
   }, [startTicker, status, timeline.segments.length]);
 
   const pause = useCallback(() => {
@@ -215,8 +281,10 @@ export function useIntervalApp() {
     accumulatedRef.current = 0;
     skipRef.current = 0;
     cueIndexRef.current = 0;
+    holdIndexRef.current = 0;
     setElapsed(0);
     setStatus('idle');
+    setHeld(false);
     void deactivateKeepAwake(KEEP_AWAKE_TAG);
   }, [stopTicker]);
 
@@ -235,9 +303,18 @@ export function useIntervalApp() {
       return;
     }
     setElapsed(next);
-    // Sample now rather than waiting up to a tick: the cursor walks past every
-    // cue the jump swallowed and sounds the one opening the new phase.
-    if (status === 'running') tickRef.current();
+    if (status === 'running') {
+      // Sample now rather than waiting up to a tick: the cursor walks past
+      // every cue the jump swallowed and sounds the one opening the new phase.
+      tickRef.current();
+      return;
+    }
+    // Already paused, so landing on a hold just turns the pause into the wait
+    // — resuming must not stop again on the same spot.
+    const hold = timeline.holds[holdIndexRef.current];
+    const landsOnHold = hold !== undefined && next >= hold;
+    if (landsOnHold) holdIndexRef.current += 1;
+    setHeld(landsOnHold);
   }, [finish, readElapsed, status, timeline]);
 
   // Returning to the foreground resyncs immediately rather than waiting for the
@@ -255,9 +332,20 @@ export function useIntervalApp() {
   // ── Config & presets ───────────────────────────────────────────
   const isActive = status === 'running' || status === 'paused';
 
+  /** Anything that changes what Start plays drops a finished session. */
+  const settle = useCallback(() => {
+    setStatus('idle');
+    setElapsed(0);
+  }, []);
+
   const persistPresets = useCallback((next: Preset[]) => {
     setPresets(next);
     void storage.savePresets(next);
+  }, []);
+
+  const persistCircuits = useCallback((next: Circuit[]) => {
+    setCircuits(next);
+    void storage.saveCircuits(next);
   }, []);
 
   /**
@@ -268,13 +356,12 @@ export function useIntervalApp() {
     (next: IntervalConfig) => {
       if (isActive) return;
       setConfig(next);
-      setStatus('idle');
-      setElapsed(0);
+      settle();
       persistPresets(
         presets.map((p) => (p.id === activeId ? { ...p, config: next } : p)),
       );
     },
-    [activeId, isActive, persistPresets, presets],
+    [activeId, isActive, persistPresets, presets, settle],
   );
 
   const selectPreset = useCallback(
@@ -284,11 +371,10 @@ export function useIntervalApp() {
       if (!target) return;
       setActiveId(target.id);
       setConfig(target.config);
-      setStatus('idle');
-      setElapsed(0);
+      settle();
       void storage.saveActivePresetId(target.id);
     },
-    [activeId, isActive, presets],
+    [activeId, isActive, presets, settle],
   );
 
   /** A new tab starts from the stock intervals; `copyFrom` seeds a duplicate. */
@@ -304,11 +390,10 @@ export function useIntervalApp() {
       persistPresets([...presets, preset]);
       setActiveId(preset.id);
       setConfig(preset.config);
-      setStatus('idle');
-      setElapsed(0);
+      settle();
       void storage.saveActivePresetId(preset.id);
     },
-    [isActive, persistPresets, presets],
+    [isActive, persistPresets, presets, settle],
   );
 
   const duplicateTab = useCallback(
@@ -331,7 +416,8 @@ export function useIntervalApp() {
 
   /**
    * The last tab is kept — the intervals need somewhere to live, and an empty
-   * strip would leave no way back.
+   * strip would leave no way back. Circuits drop the deleted preset's steps
+   * rather than keep pointing at nothing.
    */
   const deleteTab = useCallback(
     (id: string) => {
@@ -340,6 +426,11 @@ export function useIntervalApp() {
       if (index < 0) return;
       const next = presets.filter((p) => p.id !== id);
       persistPresets(next);
+      if (circuits.some((c) => c.presetIds.includes(id))) {
+        persistCircuits(
+          circuits.map((c) => ({ ...c, presetIds: c.presetIds.filter((p) => p !== id) })),
+        );
+      }
       if (id !== activeId) return;
 
       // Deleting the open tab falls back to its neighbour rather than jumping
@@ -347,11 +438,95 @@ export function useIntervalApp() {
       const fallback = next[Math.min(index, next.length - 1)];
       setActiveId(fallback.id);
       setConfig(fallback.config);
-      setStatus('idle');
-      setElapsed(0);
+      settle();
       void storage.saveActivePresetId(fallback.id);
     },
-    [activeId, isActive, persistPresets, presets],
+    [activeId, circuits, isActive, persistCircuits, persistPresets, presets, settle],
+  );
+
+  // ── Circuits ───────────────────────────────────────────────────
+  const selectMode = useCallback(
+    (next: Mode) => {
+      if (isActive || next === mode) return;
+      setMode(next);
+      settle();
+      void storage.saveMode(next);
+    },
+    [isActive, mode, settle],
+  );
+
+  const selectCircuit = useCallback(
+    (id: string) => {
+      if (isActive || id === activeCircuitId) return;
+      if (!circuits.some((c) => c.id === id)) return;
+      setActiveCircuitId(id);
+      settle();
+      void storage.saveActiveCircuitId(id);
+    },
+    [activeCircuitId, circuits, isActive, settle],
+  );
+
+  /** A new circuit starts empty; `copyFrom` seeds a duplicate. */
+  const createCircuit = useCallback(
+    (name: string, copyFrom?: Circuit) => {
+      if (isActive) return;
+      const trimmed = name.trim();
+      if (!trimmed) return;
+      const circuit = {
+        ...makeCircuit(uniqueName(circuits, trimmed), copyFrom?.presetIds),
+        pauseBetween: copyFrom?.pauseBetween ?? false,
+      };
+      persistCircuits([...circuits, circuit]);
+      setActiveCircuitId(circuit.id);
+      settle();
+      void storage.saveActiveCircuitId(circuit.id);
+    },
+    [circuits, isActive, persistCircuits, settle],
+  );
+
+  const duplicateCircuit = useCallback(
+    (id: string) => {
+      const source = circuits.find((c) => c.id === id);
+      if (source) createCircuit(`${source.name} copy`, source);
+    },
+    [circuits, createCircuit],
+  );
+
+  const renameCircuit = useCallback(
+    (id: string, name: string) => {
+      const trimmed = name.trim();
+      if (!trimmed) return;
+      const unique = uniqueName(circuits, trimmed, id);
+      persistCircuits(circuits.map((c) => (c.id === id ? { ...c, name: unique } : c)));
+    },
+    [circuits, persistCircuits],
+  );
+
+  /** Unlike presets, the last circuit can go: circuits are optional. */
+  const deleteCircuit = useCallback(
+    (id: string) => {
+      if (isActive) return;
+      const index = circuits.findIndex((c) => c.id === id);
+      if (index < 0) return;
+      const next = circuits.filter((c) => c.id !== id);
+      persistCircuits(next);
+      if (id !== activeCircuitId) return;
+
+      const fallback = next[Math.min(index, next.length - 1)];
+      setActiveCircuitId(fallback?.id ?? '');
+      settle();
+      void storage.saveActiveCircuitId(fallback?.id ?? '');
+    },
+    [activeCircuitId, circuits, isActive, persistCircuits, settle],
+  );
+
+  const updateCircuit = useCallback(
+    (next: Circuit) => {
+      if (isActive) return;
+      settle();
+      persistCircuits(circuits.map((c) => (c.id === next.id ? next : c)));
+    },
+    [circuits, isActive, persistCircuits, settle],
   );
 
   const toggleSound = useCallback(() => {
@@ -366,7 +541,10 @@ export function useIntervalApp() {
   // ── Derived read-outs ──────────────────────────────────────────
   const segmentIndex = indexAt(timeline, elapsed);
   const segment = timeline.segments[segmentIndex];
-  const phase = segment?.phase ?? timeline.segments[timeline.segments.length - 1]?.phase ?? 'work';
+  const lastSegment = timeline.segments[timeline.segments.length - 1];
+  const phase = segment?.phase ?? lastSegment?.phase ?? 'work';
+  const blockIndex = segment?.block ?? Math.max(0, timeline.blocks.length - 1);
+  const block = timeline.blocks[blockIndex];
   const remainingInPhase = segment
     ? Math.max(0, segment.start + segment.duration - elapsed)
     : 0;
@@ -379,9 +557,14 @@ export function useIntervalApp() {
     presets,
     activeId,
     config,
+    circuits,
+    activeCircuit,
+    mode,
+    isCircuit,
     timeline,
     status,
     isActive,
+    held,
     soundEnabled,
     // read-outs
     segmentIndex,
@@ -394,8 +577,14 @@ export function useIntervalApp() {
     totalRemaining: Math.max(0, timeline.totalDuration - elapsed),
     overallProgress:
       timeline.totalDuration === 0 ? 0 : Math.min(1, elapsed / timeline.totalDuration),
-    currentCycle: segment?.cycle ?? config.cycles,
-    currentSet: segment?.set ?? config.sets,
+    blockIndex,
+    blockName: block?.name ?? '',
+    /** True during the break between two exercises of a circuit. */
+    betweenBlocks: segment?.between ?? false,
+    currentCycle: segment?.cycle ?? block?.cycles ?? 1,
+    blockCycles: block?.cycles ?? 1,
+    currentSet: segment?.set ?? block?.sets ?? 1,
+    blockSets: block?.sets ?? 1,
     canDelete: presets.length > 1,
     // actions
     start,
@@ -409,6 +598,13 @@ export function useIntervalApp() {
     duplicateTab,
     renameTab,
     deleteTab,
+    selectMode,
+    selectCircuit,
+    createCircuit,
+    duplicateCircuit,
+    renameCircuit,
+    deleteCircuit,
+    updateCircuit,
     toggleSound,
   };
 }

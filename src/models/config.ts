@@ -74,3 +74,13 @@ export function formatClock(seconds: number): string {
   const rest = safe % 60;
   return `${minutes}:${String(rest).padStart(2, '0')}`;
 }
+
+/** m:ss, or h:mm:ss past the hour, for the workout stopwatch. */
+export function formatElapsed(ms: number): string {
+  const safe = Math.max(0, Math.floor(ms / 1000));
+  const hours = Math.floor(safe / 3600);
+  const minutes = Math.floor((safe % 3600) / 60);
+  const seconds = String(safe % 60).padStart(2, '0');
+  if (hours === 0) return `${minutes}:${seconds}`;
+  return `${hours}:${String(minutes).padStart(2, '0')}:${seconds}`;
+}

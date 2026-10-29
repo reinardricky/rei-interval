@@ -3,7 +3,8 @@ import { Pressable, StyleSheet, Text, View } from 'react-native';
 import { LinearGradient } from 'expo-linear-gradient';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
-import { formatDuration, totalSeconds } from '../models/config';
+import { STOPWATCH_BAR_HEIGHT } from '../components/StopwatchBar';
+import { formatDuration } from '../models/config';
 import { theme } from '../theme';
 import type { IntervalApp } from '../useIntervalApp';
 
@@ -11,12 +12,21 @@ const ACCENT = theme.success;
 
 export function CompleteScreen({ app }: { app: IntervalApp }) {
   const insets = useSafeAreaInsets();
+  const exercises = app.timeline.blocks.length;
+  const extra = app.isCircuit
+    ? `${exercises} ${exercises === 1 ? 'exercise' : 'exercises'}`
+    : app.config.sets > 1
+      ? `${app.config.sets} sets`
+      : '';
 
   return (
     <LinearGradient
       colors={['#1B3B27', '#13221A', theme.base]}
       locations={[0, 0.4, 0.78]}
-      style={[styles.root, { paddingTop: insets.top, paddingBottom: insets.bottom }]}
+      style={[
+        styles.root,
+        { paddingTop: insets.top + STOPWATCH_BAR_HEIGHT, paddingBottom: insets.bottom },
+      ]}
     >
       <View style={styles.center}>
         <View style={styles.check}>
@@ -24,8 +34,8 @@ export function CompleteScreen({ app }: { app: IntervalApp }) {
         </View>
         <Text style={styles.title}>Session complete</Text>
         <Text style={styles.detail}>
-          {app.timeline.workCount} work intervals  ·  {formatDuration(totalSeconds(app.config))}
-          {app.config.sets > 1 ? `  ·  ${app.config.sets} sets` : ''}
+          {app.timeline.workCount} work intervals  ·  {formatDuration(app.timeline.totalDuration)}
+          {extra ? `  ·  ${extra}` : ''}
         </Text>
         <View style={styles.actions}>
           <Pressable style={[styles.button, styles.primary]} onPress={app.start}>

@@ -10,6 +10,15 @@ clock stays honest even when Android throttles background timers.
   options sheet (tap the open tab, or long-press any tab).
 - **Configurable intervals** — prepare, work, rest, cycles, sets, rest between
   sets. Steppers for quick nudges, tap the value for a keypad.
+- **Circuits** — chain presets into one continuous workout (switch to
+  *Circuits* above the tabs). Only the first exercise gets its prepare
+  countdown; between exercises the earlier one's *rest between sets* runs as
+  the break. Steps link to their presets, so editing a preset updates every
+  circuit using it. Optionally pause before each new exercise until you tap.
+- **Workout stopwatch** — a total-time clock pinned to the top of every screen,
+  independent of the intervals. Starting a workout starts it; pausing the
+  intervals does not pause it. Stop freezes the total until you clear it, and it
+  survives the app being closed.
 - **Workout screen** — large countdown ring, phase colour as an accent, cycle and
   set trackers, and an *Up next* queue of the whole session that auto-scrolls.
 - **Audio cues** — a tick on the last three seconds and a distinct tone at each

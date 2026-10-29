@@ -7,6 +7,9 @@ export type Preset = {
   config: IntervalConfig;
 };
 
+/** Anything that lives in a tab strip: presets and circuits. */
+export type Named = { id: string; name: string };
+
 let seq = 0;
 
 /**
@@ -14,9 +17,13 @@ let seq = 0;
  * counter is enough — the counter matters because duplicating a tab can mint
  * two ids inside the same millisecond.
  */
-export function createPreset(name: string, config: IntervalConfig = defaultConfig): Preset {
+export function newId(): string {
   seq += 1;
-  return { id: `${Date.now()}-${seq}`, name, config };
+  return `${Date.now()}-${seq}`;
+}
+
+export function createPreset(name: string, config: IntervalConfig = defaultConfig): Preset {
+  return { id: newId(), name, config };
 }
 
 export const DEFAULT_PRESET_NAME = 'Default';
@@ -38,7 +45,7 @@ export function presetSummary(preset: Preset): string {
  * suffix rather than silently producing two identical labels. Matching is
  * case-insensitive but the suffixed name keeps the casing they typed.
  */
-export function uniqueName(presets: Preset[], name: string, ignoreId?: string): string {
+export function uniqueName(presets: Named[], name: string, ignoreId?: string): string {
   const taken = (candidate: string) =>
     presets.some(
       (p) => p.id !== ignoreId && p.name.toLowerCase() === candidate.toLowerCase(),

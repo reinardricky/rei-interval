@@ -5,6 +5,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { PhaseClock } from '../components/PhaseClock';
 import { PhaseList } from '../components/PhaseList';
+import { STOPWATCH_BAR_HEIGHT } from '../components/StopwatchBar';
 import { TransportIcon, type TransportIconName } from '../components/TransportIcon';
 import { formatClock } from '../models/config';
 import { phaseLabel } from '../models/timeline';
@@ -25,9 +26,11 @@ export function WorkoutScreen({ app }: { app: IntervalApp }) {
   // clock is not running, without needing to read anything.
   const accent = paused ? pausedColor : phaseColors[app.phase];
 
+  // The stopwatch bar, and for circuits the exercise title, come out of the
+  // ring's share of the height.
   const diameter = Math.max(
     140,
-    Math.min(300, Math.min(height * 0.34, width * 0.74)),
+    Math.min(300, Math.min(height * (app.isCircuit ? 0.27 : 0.31), width * 0.74)),
   );
 
   // A fresh array every tick would push a new gradient across to the native
@@ -43,7 +46,7 @@ export function WorkoutScreen({ app }: { app: IntervalApp }) {
       locations={[0, 0.34, 0.7]}
       style={styles.root}
     >
-      <View style={[styles.header, { paddingTop: insets.top + 10 }]}>
+      <View style={[styles.header, { paddingTop: insets.top + STOPWATCH_BAR_HEIGHT + 2 }]}>
         <View style={styles.headerRow}>
           <View style={styles.headerText}>
             <Text style={styles.headerLabel}>TOTAL REMAINING</Text>
@@ -64,21 +67,44 @@ export function WorkoutScreen({ app }: { app: IntervalApp }) {
       </View>
 
       <View style={styles.clockWrap}>
+        {app.isCircuit ? (
+          <View style={styles.exercise}>
+            <Text style={styles.exerciseLabel}>
+              {app.betweenBlocks || app.held
+                ? 'UP NEXT'
+                : `EXERCISE ${app.blockIndex + 1} OF ${app.timeline.blocks.length}`}
+            </Text>
+            <Text style={styles.exerciseName} numberOfLines={1}>
+              {app.blockName}
+            </Text>
+          </View>
+        ) : null}
         <PhaseClock
           secondsRemaining={app.secondsRemaining}
           progress={app.phaseProgress}
           remainingMs={app.phaseRemainingMs}
           running={app.status === 'running'}
           segmentIndex={app.segmentIndex}
-          label={paused ? 'Paused' : phaseLabel[app.phase]}
+          label={app.held ? 'Ready?' : paused ? 'Paused' : phaseLabel[app.phase]}
           accent={accent}
           diameter={diameter}
         />
         <View style={styles.chips}>
-          <Chip label="Cycle" value={`${app.currentCycle}/${app.config.cycles}`} />
-          {app.config.sets > 1 ? (
-            <Chip label="Set" value={`${app.currentSet}/${app.config.sets}`} />
-          ) : null}
+          {/* The break between exercises counts toward neither of them, but
+              still holds the row so the queue below does not jump. */}
+          {app.betweenBlocks ? (
+            <Chip
+              label="Exercise"
+              value={`${app.blockIndex + 1}/${app.timeline.blocks.length}`}
+            />
+          ) : (
+            <>
+              <Chip label="Cycle" value={`${app.currentCycle}/${app.blockCycles}`} />
+              {app.blockSets > 1 ? (
+                <Chip label="Set" value={`${app.currentSet}/${app.blockSets}`} />
+              ) : null}
+            </>
+          )}
         </View>
       </View>
 
@@ -86,7 +112,7 @@ export function WorkoutScreen({ app }: { app: IntervalApp }) {
         <PhaseList
           timeline={app.timeline}
           currentIndex={app.segmentIndex}
-          showSets={app.config.sets > 1}
+          showExercise={app.isCircuit}
           accent={accent}
         />
       </View>
@@ -95,7 +121,7 @@ export function WorkoutScreen({ app }: { app: IntervalApp }) {
         <RoundButton icon="reset" label="Reset" onPress={app.reset} size={54} />
         <RoundButton
           icon={app.status === 'running' ? 'pause' : 'play'}
-          label={app.status === 'running' ? 'Pause' : 'Resume'}
+          label={app.status === 'running' ? 'Pause' : app.held ? 'Continue' : 'Resume'}
           onPress={app.toggle}
           size={78}
           fill={accent}
@@ -181,6 +207,14 @@ const styles = StyleSheet.create({
   },
   trackFill: { height: 4, borderRadius: 4 },
   clockWrap: { alignItems: 'center', paddingTop: 14 },
+  exercise: { alignItems: 'center', marginBottom: 10, paddingHorizontal: 22 },
+  exerciseLabel: {
+    color: 'rgba(255,255,255,0.5)',
+    fontSize: 10,
+    fontWeight: '800',
+    letterSpacing: 1.8,
+  },
+  exerciseName: { color: theme.text, fontSize: 20, fontWeight: '800', marginTop: 2 },
   chips: { flexDirection: 'row', gap: 10, marginTop: 20 },
   chip: {
     flexDirection: 'row',

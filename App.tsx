@@ -3,20 +3,26 @@ import { StyleSheet, Text, View } from 'react-native';
 import { StatusBar } from 'expo-status-bar';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 
+import { StopwatchBar } from './src/components/StopwatchBar';
 import { CompleteScreen } from './src/screens/CompleteScreen';
 import { SetupScreen } from './src/screens/SetupScreen';
 import { WorkoutScreen } from './src/screens/WorkoutScreen';
 import { theme } from './src/theme';
 import { useIntervalApp } from './src/useIntervalApp';
+import { useStopwatch } from './src/useStopwatch';
 
 export default function App() {
-  const app = useIntervalApp();
+  const stopwatch = useStopwatch();
+  // Starting intervals means the workout is on, so the stopwatch comes along —
+  // but pausing them does not pause it: the breaks are part of the workout.
+  const app = useIntervalApp({ onSessionStart: stopwatch.start });
+  const ready = app.hydrated && stopwatch.hydrated;
 
   return (
     <SafeAreaProvider>
       <StatusBar style="light" />
       <View style={styles.root}>
-        {!app.hydrated ? (
+        {!ready ? (
           // Presets come from storage; rendering setup first would flash the
           // stock intervals before the athlete's own tab loads.
           <View style={styles.splash}>
@@ -29,6 +35,10 @@ export default function App() {
         ) : (
           <SetupScreen app={app} />
         )}
+        {/* Rendered after the screen so it stacks on top of it. */}
+        {ready ? (
+          <StopwatchBar stopwatch={stopwatch} solid={!app.isActive && app.status !== 'completed'} />
+        ) : null}
       </View>
     </SafeAreaProvider>
   );
